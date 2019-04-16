@@ -1,51 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Variable
+import numpy as np
+import torch.optim as optim
 
+from modules import *
 
-# A block consisting of convolution, batch normalization (optional) followed by a nonlinearity (defaults to Leaky ReLU)
-class ConvUnit(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel, stride=1, padding=0, batchnorm=True, nonlinearity=nn.LeakyReLU(0.2)):
-        super(ConvUnit, self).__init__()
-        if batchnorm is True:
-            self.model = nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels, kernel, stride, padding),
-                    nn.BatchNorm2d(out_channels), nonlinearity)
-        else:
-            self.model = nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel, stride, padding), nonlinearity)
-
-    def forward(self, x):
-        return self.model(x)
-
-# A block consisting of a transposed convolution, batch normalization (optional) followed by a nonlinearity (defaults to Leaky ReLU)
-class ConvUnitTranspose(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel, stride=1, padding=0, out_padding=0, batchnorm=True, nonlinearity=nn.LeakyReLU(0.2)):
-        super(ConvUnitTranspose, self).__init__()
-        if batchnorm is True:
-            self.model = nn.Sequential(
-                    nn.ConvTranspose2d(in_channels, out_channels, kernel, stride, padding, out_padding),
-                    nn.BatchNorm2d(out_channels), nonlinearity)
-        else:
-            self.model = nn.Sequential(nn.ConvTranspose2d(in_channels, out_channels, kernel, stride, padding, out_padding), nonlinearity)
-
-    def forward(self, x):
-        return self.model(x)
-
-# A block consisting of an affine layer, batch normalization (optional) followed by a nonlinearity (defaults to Leaky ReLU)
-class LinearUnit(nn.Module):
-    def __init__(self, in_features, out_features, batchnorm=True, nonlinearity=nn.LeakyReLU(0.2)):
-        super(LinearUnit, self).__init__()
-        if batchnorm is True:
-            self.model = nn.Sequential(
-                    nn.Linear(in_features, out_features),
-                    nn.BatchNorm1d(out_features), nonlinearity)
-        else:
-            self.model = nn.Sequential(
-                    nn.Linear(in_features, out_features), nonlinearity)
-
-    def forward(self, x):
-        return self.model(x)
-
+LEARNING_RATE = 0.0002
 
 class DisentangledVAE(nn.Module):
     """
@@ -123,10 +85,11 @@ class DisentangledVAE(nn.Module):
         The model is trained with the Adam optimizer with a learning rate of 0.0002, betas of 0.9 and 0.999, with a batch size of 25 for 200 epochs
 
     """
-    def __init__(self, f_dim=256, z_dim=32, conv_dim=2048, step=256, in_size=64, hidden_dim=512,
-                 frames=8, nonlinearity=None, factorised=False, device=torch.device('cpu')):
+    def __init__(self, f_dim=256, z_dim=32, conv_dim=128, step=256, in_size=64, hidden_dim=128,
+                 frames=8, nonlinearity=None, factorised=False, in_channels=3, device=torch.device('cuda')):
         super(DisentangledVAE, self).__init__()
         self.device = device
+        self.in_channels = in_channels
         self.f_dim = f_dim
         self.z_dim = z_dim
         self.frames = frames
@@ -162,23 +125,22 @@ class DisentangledVAE(nn.Module):
             self.z_mean = nn.Linear(self.hidden_dim, self.z_dim)
             self.z_logvar = nn.Linear(self.hidden_dim, self.z_dim)
 
+        self.final_conv_size = 34
+        
         self.conv = nn.Sequential(
-                ConvUnit(3, step, 5, 1, 2), # 3*64*64 -> 256*64*64
-                ConvUnit(step, step, 5, 2, 2), # 256,64,64 -> 256,32,32
-                ConvUnit(step, step, 5, 2, 2), # 256,32,32 -> 256,16,16
-                ConvUnit(step, step, 5, 2, 2), # 256,16,16 -> 256,8,8
+                ConvUnit(self.in_channels, step // 4, 3, 1, 2),
+                ConvUnit(step // 4, step, 3, 2, 2)
                 )
-        self.final_conv_size = in_size // 8
         self.conv_fc = nn.Sequential(LinearUnit(step * (self.final_conv_size ** 2), self.conv_dim * 2),
                 LinearUnit(self.conv_dim * 2, self.conv_dim))
 
         self.deconv_fc = nn.Sequential(LinearUnit(self.f_dim + self.z_dim, self.conv_dim * 2, False),
                 LinearUnit(self.conv_dim * 2, step * (self.final_conv_size ** 2), False))
         self.deconv = nn.Sequential(
-                ConvUnitTranspose(step, step, 5, 2, 2, 1),
-                ConvUnitTranspose(step, step, 5, 2, 2, 1),
-                ConvUnitTranspose(step, step, 5, 2, 2, 1),
-                ConvUnitTranspose(step, 3, 5, 1, 2, 0, nonlinearity=nn.Tanh()))
+                #ConvUnitTranspose(step, step, 3, 2, 2, 1),
+                #ConvUnitTranspose(step, step, 3, 2, 2, 1),
+                ConvUnitTranspose(step, step // 4, 3, 2, 2, 1),
+                ConvUnitTranspose(step // 4, self.in_channels, 3, 1, 2, 0, nonlinearity=nn.Sigmoid()))
 
         for m in self.modules():
             if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
@@ -186,6 +148,9 @@ class DisentangledVAE(nn.Module):
                 nn.init.constant_(m.bias, 1)
             elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight)
+
+
+        self.cuda()
 
     # If random sampling is true, reparametrization occurs else z_t is just set to the mean
     def sample_z(self, batch_size, random_sampling=True):
@@ -271,12 +236,781 @@ class DisentangledVAE(nn.Module):
         logvar = self.z_logvar(features)
         return mean, logvar, self.reparameterize(mean, logvar, self.training)
 
-    def forward(self, x):
-        z_mean_prior, z_logvar_prior, _ = self.sample_z(x.size(0), random_sampling=self.training)
+    def encode(self, x):
         conv_x = self.encode_frames(x)
         f_mean, f_logvar, f = self.encode_f(conv_x)
         z_mean, z_logvar, z = self.encode_z(conv_x, f)
+
+        return f_mean, f_logvar, f, z_mean, z_logvar, z
+
+    def decode(self, f, z):
+
         f_expand = f.unsqueeze(1).expand(-1, self.frames, self.f_dim)
         zf = torch.cat((z, f_expand), dim=2)
         recon_x = self.decode_frames(zf)
+
+        return recon_x
+
+    def forward(self, x):
+        z_mean_prior, z_logvar_prior, _ = self.sample_z(x.size(0), random_sampling=self.training)
+
+        f_mean, f_logvar, f, z_mean, z_logvar, z = self.encode(x)
+
+        recon_x = self.decode(f, z)
+        
         return f_mean, f_logvar, f, z_mean, z_logvar, z, z_mean_prior, z_logvar_prior, recon_x
+
+
+
+
+class DisentangledVAE_Attention(nn.Module):
+    #f_dim = 128
+    def __init__(self, f_dim=32, z_dim=128, z_dim_seq=32, conv_dim=128, step=64, in_size=64, in_channels=3,
+                 frames=8, nonlinearity=None, device=torch.device('cuda:0')):
+
+        super(DisentangledVAE_Attention, self).__init__()
+        self.device = device
+        self.f_dim = f_dim
+        #self.f_mha_dim = f_mha_dim
+        self.z_dim = z_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.conv_dim = conv_dim
+        self.step = step
+        self.in_size = in_size
+        self.in_channels = in_channels
+        nl = nn.LeakyReLU(0.2) if nonlinearity is None else nonlinearity
+
+        self.pos_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.conv_dim, padding_idx=0),
+            freeze=True)
+
+        self.pos_enc_decoder = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.z_dim_seq, padding_idx=0),
+            freeze=True)
+
+        #self.mha_z_gen = mha_stack(z_dim_seq, residual=True, causality=True)
+        #positional_encoding(num_units=self.conv_dim, zeros_pad=False, scale=False)
+        self.pix_attn_z = pixel_attention(in_channels, 64, 64, 32)
+        self.pix_attn_f = pixel_attention(in_channels, 64, 64, 32)
+
+        self.fc_z_mean = LinearUnit(self.z_dim_seq * self.frames, self.z_dim)
+        self.fc_z_logvar = LinearUnit(self.z_dim_seq * self.frames, self.z_dim)
+
+        self.fc_z_decoder = LinearUnit(self.z_dim, self.z_dim_seq * self.frames)
+
+        self.mha_z_convert = multihead_attention(conv_dim, z_dim_seq, residual=False)
+        self.mha_z_stack = mha_stack(z_dim_seq, residual=True)
+
+        self.mha_f_convert = multihead_attention(conv_dim, z_dim_seq, residual=False)
+        self.mha_f_stack = mha_stack(z_dim_seq, residual=True)
+
+
+        #self.mha_z_mean = multihead_attention(z_dim_seq, z_dim_seq, residual=True)
+        #self.mha_z_logvar = multihead_attention(z_dim_seq, z_dim_seq, residual=True)
+
+        #self.mha_f = multihead_attention(conv_dim, f_mha_dim, residual=False)
+
+        self.mha_z_decoder = mha_stack(z_dim_seq, stack_size=5, residual=True, self_attention=False, causality=True)
+
+        self.fc_f_mean = LinearUnit(self.z_dim_seq * self.frames, self.f_dim, False)
+        self.fc_f_logvar = LinearUnit(self.z_dim_seq * self.frames, self.f_dim, False)
+
+        self.fc_zf = LinearUnit(self.z_dim_seq + self.f_dim, self.z_dim_seq + self.f_dim)
+
+
+        self.final_conv_size = 32
+        
+        self.conv_f = nn.Sequential(
+                ConvUnit(self.in_channels, step // 4, 3, 1, 1),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                ConvUnit(step // 4, step, 3, 2, 1)
+                )
+        self.conv_f_fc = nn.Sequential(LinearUnit(step * (self.final_conv_size ** 2), self.conv_dim * 2),
+                LinearUnit(self.conv_dim * 2, self.conv_dim))
+
+        self.conv_z = nn.Sequential(
+                ConvUnit(self.in_channels, step // 4, 3, 1, 1),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                ConvUnit(step // 4, step, 3, 2, 1)
+                )
+        self.conv_z_fc = nn.Sequential(LinearUnit(step * (self.final_conv_size ** 2), self.conv_dim * 2),
+                LinearUnit(self.conv_dim * 2, self.conv_dim))
+
+        self.deconv_fc = nn.Sequential(LinearUnit(self.f_dim + self.z_dim_seq, self.conv_dim * 2, False),
+                LinearUnit(self.conv_dim * 2, step * (self.final_conv_size ** 2), False))
+        self.deconv = nn.Sequential(
+                ConvUnitTranspose(step, step // 4, 3, 2, 1, 1),
+                #ConvUnitTranspose(step // 4, step // 4, 3, 2, 2, 1),
+                #ConvUnitTranspose(step // 4, step // 4, 3, 2, 2, 1),
+                ConvUnitTranspose(step // 4, self.in_channels, 3, 1, 1, 0, nonlinearity=nn.Sigmoid()))
+
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 1)
+            elif isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+
+        self.to(self.device)
+
+    def reparameterize(self, mean, logvar, random_sampling=True):
+        # Reparametrization occurs only if random sampling is set to true, otherwise mean is returned
+        if random_sampling is True:
+            eps = torch.randn_like(logvar)
+            std = torch.exp(0.5*logvar)
+            z = mean + eps*std
+            return z
+        else:
+            return mean
+
+    def encode_conv_f(self, x):
+        x = x.view(-1, self.in_channels, self.in_size, self.in_size)
+        x, _ = self.pix_attn_f(x)
+        x = self.conv_f(x)
+        #print(x.shape)
+        x = x.view(-1, self.step * (self.final_conv_size ** 2))
+        x = self.conv_f_fc(x)
+        x = x.view(-1, self.frames, self.conv_dim)
+        return x
+
+    def encode_conv_z(self, x):
+        x = x.view(-1, self.in_channels, self.in_size, self.in_size)
+        x, _ = self.pix_attn_z(x)
+        x = self.conv_z(x)
+        x = x.view(-1, self.step * (self.final_conv_size ** 2))
+        x = self.conv_z_fc(x)
+        x = x.view(-1, self.frames, self.conv_dim)
+        return x
+
+    def decode_conv(self, zf):
+        x = self.deconv_fc(zf)
+        x = x.view(-1, self.step, self.final_conv_size, self.final_conv_size)
+        x = self.deconv(x)
+        #print(x.shape)
+        return x.view(-1, self.frames, self.in_channels, self.in_size, self.in_size)
+
+    def encode(self, x):
+
+        x_conv = self.encode_conv_f(x)
+
+        
+        bs = x_conv.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long()).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc(x_pos)
+
+        x_conv = x_conv + x_pos
+
+        f_0 = self.mha_f_convert(x_conv, x_conv, x_conv)
+        f_0 = self.mha_f_stack(f_0, f_0, f_0)
+        
+
+        #f_0 = self.fc_f_encoderr
+
+        f_0 = f_0.view(-1, self.frames * self.z_dim_seq)
+
+        f_mean = self.fc_f_mean(f_0)
+
+        f_logvar = self.fc_f_logvar(f_0)
+
+        f = self.reparameterize(f_mean, f_logvar)
+
+        #########################
+
+        x_conv = self.encode_conv_z(x) + x_pos
+
+        z_0 = self.mha_z_convert(x_conv, x_conv, x_conv)
+        z_0 = self.mha_z_stack(z_0, z_0, z_0)
+
+        z_0 = z_0.view(-1, self.z_dim_seq * self.frames)
+
+        z_mean = self.fc_z_mean(z_0)
+        z_logvar = self.fc_z_logvar(z_0)
+
+        z = self.reparameterize(z_mean, z_logvar)
+
+        return f_mean, f_logvar, f, z_mean, z_logvar, z
+
+    def decode(self, f, z):
+
+        z = self.fc_z_decoder(z)
+
+        z = z.view(-1, self.frames, self.z_dim_seq)
+
+        bs = z.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long()).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc_decoder(x_pos)
+
+        z = z + x_pos
+
+        z = self.mha_z_decoder(z, z, z)
+        #z = self.fc_z_decoder(z)
+
+        f = f.unsqueeze(1).expand(-1, self.frames, self.f_dim)
+
+        zf = torch.cat((z, f), dim=2)
+
+        zf = self.fc_zf(zf)
+
+        #print(zf.shape)
+
+        x_recon = self.decode_conv(zf)
+
+        #print(x_recon.shape)
+
+        return x_recon
+
+    def get_attn_maps(self, x):
+
+        x = x.view(-1, self.in_channels, self.in_size, self.in_size)
+        _, az = self.pix_attn_z(x)
+        _, af = self.pix_attn_f(x)
+
+        return af, az
+
+
+    def forward(self, x, dropLast=False):
+
+        if dropLast:
+            x[:, -1] = 0
+
+
+       
+        f_mean, f_logvar, f, z_mean, z_logvar, z = self.encode(x)
+
+        #print(z.shape, f.shape)
+
+        #these get matched to prior
+
+        x_recon = self.decode(f, z).view(-1, self.frames, self.in_channels, self.in_size, self.in_size)
+
+        return f_mean, f_logvar, f, z_mean, z_logvar, z, x_recon
+
+
+
+#generate latent codes
+class Distr_Network(nn.Module):
+
+    def __init__(self, f_dim, z_dim_seq, frames, p_dim=128, mha_stack_size=5):
+
+        super(Distr_Network, self).__init__()
+
+        self.f_dim = f_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.p_dim = p_dim
+
+        self.fc_1 = LinearUnit(p_dim, z_dim_seq * frames)
+
+        self.mha_stack_1 = mha_stack(z_dim_seq, stack_size=mha_stack_size, residual=True)
+
+        self.pos_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.z_dim_seq, padding_idx=0),
+            freeze=True)
+
+        self.fc_2 = LinearUnit(z_dim_seq, z_dim_seq, nonlinearity=nn.Sigmoid())
+
+        self.fc_3 = LinearUnit(p_dim, f_dim, nonlinearity=nn.Sigmoid())
+
+        self.cuda()
+
+        self.optimizer = optim.Adam(self.parameters(),LEARNING_RATE)
+
+
+    def forward(self, x):
+        #input_shape: bs, p_dim
+
+        f = self.fc_3(x)
+
+        x = self.fc_1(x)
+
+        x = x.view(-1, self.frames, self.z_dim_seq)
+
+        bs = x.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long(), requires_grad=False).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc(x_pos)
+
+        x = x + x_pos
+
+        x = self.mha_stack_1(x, x, x)
+
+        z = self.fc_2(x)
+
+        return f, z
+
+#encode real samples into latent codes
+class Encoder_Network(nn.Module):
+
+    def __init__(self, f_dim, z_dim_seq, frames, conv_dim=128, in_channels=3, step=64, in_size=64):
+
+        super(Encoder_Network, self).__init__()
+
+        self.f_dim = f_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.conv_dim = conv_dim
+        self.in_channels = in_channels
+        self.in_size = in_size
+        self.step = step
+
+        self.fc_z_mean = LinearUnit(self.z_dim_seq, self.z_dim_seq, nonlinearity=nn.Sigmoid())
+        #self.fc_z_logvar = LinearUnit(self.z_dim_seq, self.z_dim_seq)
+
+        #self.fc_z_decoder = LinearUnit(self.z_dim, self.z_dim_seq * self.frames)
+
+        self.mha_z_convert = multihead_attention(conv_dim, z_dim_seq, residual=False)
+        self.mha_z_stack = mha_stack(z_dim_seq, residual=True)
+
+        self.mha_f_convert = multihead_attention(conv_dim, z_dim_seq, residual=False)
+        self.mha_f_stack = mha_stack(z_dim_seq, residual=True)
+
+        self.pos_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.conv_dim, padding_idx=0),
+            freeze=True)
+
+        self.fc_f_mean = LinearUnit(self.z_dim_seq * self.frames, self.f_dim, nonlinearity=nn.Sigmoid())
+        #self.fc_f_logvar = LinearUnit(self.z_dim_seq * self.frames, self.f_dim)
+
+        self.final_conv_size = 32
+        
+        self.conv_f = nn.Sequential(
+                ConvUnit(self.in_channels, step // 4, 3, 1, 1),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                ConvUnit(step // 4, step, 3, 2, 1)
+                )
+        self.conv_f_fc = nn.Sequential(LinearUnit(step * (self.final_conv_size ** 2), self.conv_dim * 2),
+                LinearUnit(self.conv_dim * 2, self.conv_dim))
+
+        self.conv_z = nn.Sequential(
+                ConvUnit(self.in_channels, step // 4, 3, 1, 1),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                #ConvUnit(step // 4, step // 4, 3, 1, 2),
+                ConvUnit(step // 4, step, 3, 2, 1)
+                )
+        self.conv_z_fc = nn.Sequential(LinearUnit(step * (self.final_conv_size ** 2), self.conv_dim * 2),
+                LinearUnit(self.conv_dim * 2, self.conv_dim))
+
+        self.cuda()
+
+        self.optimizer = optim.Adam(self.parameters(),LEARNING_RATE)
+
+    def reparameterize(self, mean, logvar, random_sampling=True):
+        # Reparametrization occurs only if random sampling is set to true, otherwise mean is returned
+        if random_sampling is True:
+            eps = torch.randn_like(logvar)
+            std = torch.exp(0.5*logvar)
+            z = mean + eps*std
+            return z
+        else:
+            return mean
+
+    def encode_conv_f(self, x):
+        x = x.view(-1, self.in_channels, self.in_size, self.in_size)
+        #x, _ = self.pix_attn_f(x)
+        x = self.conv_f(x)
+        #print(x.shape)
+        x = x.view(-1, self.step * (self.final_conv_size ** 2))
+        x = self.conv_f_fc(x)
+        x = x.view(-1, self.frames, self.conv_dim)
+        return x
+
+    def encode_conv_z(self, x):
+        x = x.view(-1, self.in_channels, self.in_size, self.in_size)
+        #x, _ = self.pix_attn_z(x)
+        x = self.conv_z(x)
+        x = x.view(-1, self.step * (self.final_conv_size ** 2))
+        x = self.conv_z_fc(x)
+        x = x.view(-1, self.frames, self.conv_dim)
+        return x
+
+    def forward(self, x):
+
+        x_conv = self.encode_conv_f(x)
+        
+        bs = x_conv.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long(), requires_grad=False).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc(x_pos)
+
+        x_conv = x_conv + x_pos
+
+        f_0 = self.mha_f_convert(x_conv, x_conv, x_conv)
+        f_0 = self.mha_f_stack(f_0, f_0, f_0)
+        
+
+        #f_0 = self.fc_f_encoderr
+
+        f_0 = f_0.view(-1, self.frames * self.z_dim_seq)
+
+        f = self.fc_f_mean(f_0)
+
+        #f_logvar = self.fc_f_logvar(f_0)
+
+        #f = self.reparameterize(f_mean, f_logvar)
+
+        #########################
+
+        x_conv = self.encode_conv_z(x) + x_pos
+
+        z_0 = self.mha_z_convert(x_conv, x_conv, x_conv)
+        z_0 = self.mha_z_stack(z_0, z_0, z_0)
+
+        #z_0 = z_0.view(-1, self.z_dim_seq * self.frames)
+
+        z = self.fc_z_mean(z_0)
+        #z_logvar = self.fc_z_logvar(z_0)
+
+        #z = self.reparameterize(z_mean, z_logvar)
+
+        return f, z
+
+
+
+#decode latent codes into sequences of images
+class Decoder_Network(nn.Module):
+
+    def __init__(self, f_dim, z_dim_seq, frames, conv_dim=128, in_channels=3, step=64, in_size=64):
+
+        super(Decoder_Network, self).__init__()
+
+        self.f_dim = f_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.conv_dim = conv_dim
+        self.in_channels = in_channels
+        self.in_size = in_size
+        self.step = step
+
+        self.pos_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.z_dim_seq, padding_idx=0),
+            freeze=True)
+
+        self.mha_z_decoder = mha_stack(z_dim_seq, stack_size=5, residual=True, self_attention=False, causality=True)
+
+        self.fc_zf = LinearUnit(self.z_dim_seq + self.f_dim, self.z_dim_seq + self.f_dim)
+
+        #self.fc_z_decoder = LinearUnit(self.z_dim, self.z_dim_seq * self.frames)
+
+        self.final_conv_size = 32
+
+        self.deconv_fc = nn.Sequential(LinearUnit(self.f_dim + self.z_dim_seq, self.conv_dim * 2, False),
+                LinearUnit(self.conv_dim * 2, step * (self.final_conv_size ** 2), False))
+        self.deconv = nn.Sequential(
+                ConvUnitTranspose(step, step // 4, 3, 2, 1, 1),
+                #ConvUnitTranspose(step // 4, step // 4, 3, 2, 2, 1),
+                #ConvUnitTranspose(step // 4, step // 4, 3, 2, 2, 1),
+                ConvUnitTranspose(step // 4, self.in_channels, 3, 1, 1, 0, nonlinearity=nn.Sigmoid()))
+
+        self.cuda()
+
+        self.optimizer = optim.Adam(self.parameters(),LEARNING_RATE)
+
+    def decode_conv(self, zf):
+        x = self.deconv_fc(zf)
+        x = x.view(-1, self.step, self.final_conv_size, self.final_conv_size)
+        x = self.deconv(x)
+        #print(x.shape)
+        return x.view(-1, self.frames, self.in_channels, self.in_size, self.in_size)
+
+    def decode(self, f0, z0):
+
+        #z = self.fc_z_decoder(z)
+
+        z = z0.view(-1, self.frames, self.z_dim_seq)
+
+        bs = z.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long(), requires_grad=False).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc(x_pos)
+
+        z = z + x_pos
+
+        z = self.mha_z_decoder(z, z, z)
+        #z = self.fc_z_decoder(z)
+
+        f = f0.unsqueeze(1).expand(-1, self.frames, self.f_dim)
+
+        zf = torch.cat((z, f), dim=2)
+
+        zf = self.fc_zf(zf)
+
+        #print(zf.shape)
+
+        x_recon = self.decode_conv(zf)
+
+        #print(x_recon.shape)
+
+        return x_recon
+
+    def forward(self, f, z):
+
+        x_recon = self.decode(f, z).view(-1, self.frames, self.in_channels, self.in_size, self.in_size)
+
+        return x_recon
+
+
+#discriminate between encoded samples(0) and generated codes(1)
+class Discr_Network(nn.Module):
+
+    def __init__(self, f_dim, z_dim_seq, frames, p_dim=32, mha_stack_size=5):
+
+        super(Discr_Network, self).__init__()
+
+        self.f_dim = f_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.p_dim = p_dim
+
+        self.mha_stack_1 = mha_stack(z_dim_seq, stack_size=mha_stack_size, residual=True)
+
+        self.pos_enc = nn.Embedding.from_pretrained(
+            get_sinusoid_encoding_table(self.frames, self.z_dim_seq, padding_idx=0),
+            freeze=True)
+
+        self.attn = attention_layer(frames, z_dim_seq)
+        #self.fc_dummy = LinearUnit(frames * z_dim_seq, z_d)
+
+        self.fc_1 = LinearUnit(z_dim_seq + f_dim, p_dim)
+
+        self.fc_2 = LinearUnit(p_dim, 1, nonlinearity=nn.Sigmoid())
+
+        self.cuda()
+
+        self.optimizer = optim.Adam(self.parameters(),LEARNING_RATE)
+
+    def forward(self, f0, z0):
+        #for debugging
+        #return torch.Tensor([0])
+
+        #input_shape: bs, p_dim
+
+        z = z0.view(-1, self.frames, self.z_dim_seq)
+
+        bs = z.shape[0]
+        x_pos = Variable(torch.Tensor(np.array(range(self.frames)).repeat(bs)).long(), requires_grad=False).cuda()
+        x_pos = x_pos.view(-1, bs)
+        x_pos = x_pos.transpose(1, 0)
+        x_pos = self.pos_enc(x_pos)
+
+        z = z + x_pos
+
+        z = self.mha_stack_1(z, z, z)
+
+        #z = self.attn(z)
+        z = torch.mean(z, dim=(-2,))
+
+        zf = torch.cat([z, f0], dim=-1)
+
+        zf = self.fc_1(zf)
+
+        zf = self.fc_2(zf)
+
+        return zf
+
+
+
+class DisentangledVAE_Adversarial(nn.Module):
+
+    def __init__(self, f_dim=32, z_dim_seq=32, frames=10, p_dim=128, mha_stack_size=5, in_channels=3):
+
+        super(DisentangledVAE_Adversarial, self).__init__()
+
+        self.f_dim = f_dim
+        self.z_dim_seq = z_dim_seq
+        self.frames = frames
+        self.p_dim = p_dim
+        self.in_channels = in_channels
+
+        self.distr = Distr_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames, p_dim=p_dim)
+
+        self.enc = Encoder_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames, in_channels=in_channels)
+
+        self.dec = Decoder_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames, in_channels=in_channels)
+
+        self.discr = Discr_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames)
+
+    def forward(self, x, get_score=True):
+
+        f, z = self.enc(x)
+
+        x_recon = self.dec(f, z)
+
+        if get_score == False:
+            return x_recon
+
+        D_score = self.discr(f, z)
+
+        return x_recon, D_score
+
+    def forward_score(self, x):
+
+        f, z = self.enc(x)
+
+        D_score = self.discr(f, z)
+
+        return D_score
+
+    def gen_codes(self, batch_size=64):
+
+        inputs_r = torch.randn((batch_size, self.p_dim)).cuda()
+
+        f, z = self.distr(inputs_r)
+
+        D_score = self.discr(f, z)
+
+        return f, z, D_score
+
+    def gen_seq(self, batch_size=64, get_score=False):
+
+        inputs_r = torch.randn((batch_size, self.p_dim)).cuda()
+
+        f, z = self.distr(inputs_r)
+
+        x_gen = self.dec(f, z)
+
+        if get_score == False:
+
+            return x_gen
+
+        D_score = self.discr(f, z)
+
+        return x_gen, D_score
+
+    def zero_grad_all(self):
+
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.25)
+
+        self.distr.optimizer.zero_grad()
+        self.discr.optimizer.zero_grad()
+        self.enc.optimizer.zero_grad()
+        self.dec.optimizer.zero_grad()
+
+    def enc_dec_step(self):
+
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.25)
+
+        self.enc.optimizer.step()
+        self.dec.optimizer.step()
+
+    def gen_codes_step(self):
+
+        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.25)
+
+        self.discr.optimizer.step()
+        self.discr.optimizer.step()
+
+    def encode(self, x):
+
+        return self.enc(x)
+
+    def decode(self, f, z):
+
+        return self.dec(f, z)
+
+
+
+import matplotlib.pyplot as plt
+
+def plot(x):
+
+    x0 = x.detach().cpu()
+
+    plt.scatter(x0 [:, 0], x0 [:, 1])
+    plt.show()
+
+
+if __name__ == '__main__':
+
+    batch_size = 32
+    frames = 10
+    channels = 3
+
+    p_dim = 128
+
+    f_dim = 32
+    z_dim_seq = 32
+
+    inputs_r = torch.randn((batch_size, p_dim)).cuda()
+
+    #plot(inputs_r)
+
+    inputs_x = torch.randn((batch_size, frames, channels, 64, 64)).cuda()
+
+    distr = Distr_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames, p_dim=p_dim)
+
+    enc = Encoder_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames)
+
+    o1_f, o1_z = distr(inputs_r)
+
+    o2_f, o2_z = enc(inputs_x)
+
+    print(o1_f.shape, o1_z.shape)
+
+    print(o2_f.shape, o2_z.shape)
+
+    discr = Discr_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames)
+
+    o3 = discr(o1_f, o1_z)
+
+    o4 = discr(o2_f, o2_z)
+
+    print(o3)
+
+    print(o4)
+
+    dec = Decoder_Network(f_dim=f_dim, z_dim_seq=z_dim_seq, frames=frames)
+
+    o5 = dec(o1_f, o1_z)
+
+    print(o5.shape)
+
+    #plot(o1_f)
+
+    """
+    
+
+    model = DisentangledVAE_Attention(frames=frames)
+
+    inputs = torch.randn((batch_size * frames, channels, 64, 64)).to(model.device) * 0.2 - 0.05
+    inputs = torch.clamp(inputs, 0., 1.)
+
+    print(inputs.min(), inputs.max(), inputs.mean(), inputs.std())
+
+    _, _, _, _, _, _, out = model.forward(inputs)
+
+    print(out.shape)
+
+    print(out.min(), out.max(), out.mean(), out.std())
+    """
+
+    """
+    conv_x = model.encode_frames(inputs)
+
+    print(conv_x.shape)
+
+    mha_8 = multihead_attention(2048, 8, residual=False)
+
+    z = mha_8(conv_x, conv_x, conv_x)
+
+    print(z.shape)
+    """
+
+
+    #x = torch.randn((frames, 3, 64, 64))
+
+    #m = pixel_attention(3, 64)
+
+    #x = m(x)
+
+    #print(x.shape)
