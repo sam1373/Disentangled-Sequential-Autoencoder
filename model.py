@@ -783,7 +783,8 @@ class Discr_Network(nn.Module):
 
         self.fc_1 = LinearUnit(z_dim_seq + f_dim, p_dim)
 
-        self.fc_2 = LinearUnit(p_dim, 1, nonlinearity=nn.Sigmoid())
+
+        self.fc_2 = LinearUnit(p_dim, 1, nonlinearity=nn.Tanh())
 
         self.cuda()
 
@@ -873,11 +874,13 @@ class DisentangledVAE_Adversarial(nn.Module):
 
     def gen_seq(self, batch_size=64, get_score=False):
 
+
         inputs_r = torch.randn((batch_size, self.p_dim)).cuda()
 
         f, z = self.distr(inputs_r)
 
         x_gen = self.dec(f, z)
+
 
         if get_score == False:
 
@@ -1013,4 +1016,3 @@ if __name__ == '__main__':
 
     #x = m(x)
 
-    #print(x.shape)

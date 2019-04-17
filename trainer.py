@@ -7,9 +7,15 @@ import torch.optim as optim
 import numpy as np
 from model import *
 from tqdm import *
+<<<<<<< HEAD
 from dataset import *
 from moving_mnist.moving_mnist_loader import MovingMnistLoader
 from dataset.sprites_test import Sprites
+=======
+#from dataset import *
+from moving_mnist.moving_mnist_loader import MovingMnistLoader
+#from dataset.sprites_test import Sprites
+>>>>>>> b16400f3e43be2f20af40b00a926a2b9fca132cd
 
 __all__ = ['loss_fn', 'Trainer']
 
@@ -167,6 +173,8 @@ class Trainer(object):
 
     def train_model(self):
        self.model.train()
+
+       avgDiff = 0
        for epoch in range(self.start_epoch,self.epochs):
            self.trainloader.shuffle()
            losses = []
@@ -174,6 +182,11 @@ class Trainer(object):
            kld_zs = []
            print("Running Epoch : {}".format(epoch+1))
            print(len(self.trainloader))
+
+
+           lastDiff = avgDiff
+           avgDiff = 0
+
            for i,dataitem in tqdm(enumerate(self.trainloader,1)):
                if i >= len(self.trainloader):
                 break
@@ -184,12 +197,14 @@ class Trainer(object):
 
                loss1 = torch.Tensor([0])
 
-               if i % 5 == 0:
+
+               if lastDiff > 1.0:
                  self.model.zero_grad_all()
 
                  x_recon, enc_score = self.model(data)
 
-                 loss1 = 100 * F.mse_loss(x_recon, data, reduction='mean') - torch.mean(torch.log(enc_score + TINY))
+                 loss1 = 100 * F.mse_loss(x_recon, data, reduction='mean') - torch.mean(enc_score)
+
                  #we want enc to confuse discr and have discr give 1 to real data(even though it should give 0)
 
                  loss1.backward()
@@ -203,7 +218,7 @@ class Trainer(object):
 
                discr_real_score = self.model.forward_score(data)
 
-               loss2 = torch.mean(torch.log(discr_real_score + TINY))
+               loss2 = torch.mean(discr_real_score)
                #we want discr to give 0 for real data
 
                loss2.backward()
@@ -216,7 +231,9 @@ class Trainer(object):
 
                f, z, discr_gen_score = self.model.gen_codes()
 
-               loss3 = -torch.mean(torch.log(discr_gen_score + TINY))
+
+
+               loss3 = -torch.mean(discr_gen_score)
                #we want discr to give 1 for generated data
 
                loss3.backward()
@@ -226,6 +243,9 @@ class Trainer(object):
                print(loss1, loss2, loss3)
 
                total_loss = loss1 + loss2 + loss3
+
+               avgDiff += loss3.item() * -1 - loss2.item()
+
 
 
                """
@@ -249,10 +269,14 @@ class Trainer(object):
                #kld_zs.append(kld_z.item())
            #discr_meanloss = np.mean(discr_loss)
            meanloss = np.mean(losses)
+
+           avgDiff /= len(self.trainloader)
            #meanf = np.mean(kld_fs)
            #meanz = np.mean(kld_zs)
            self.epoch_losses.append(meanloss)
            print("Epoch {} : Average Loss: {}".format(epoch+1, meanloss))
+
+           print("Disc. quality: {}".format(avgDiff))
            self.save_checkpoint(epoch)
            self.model.eval()
            #self.sample_frames(epoch+1)
