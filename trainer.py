@@ -191,7 +191,7 @@ class Trainer(object):
 
                TINY = 1e-15
 
-               loss1 = loss4 = torch.Tensor([0])
+               loss4 = torch.Tensor([0])
 
 
                if lastDiff > 0.1:
@@ -199,7 +199,7 @@ class Trainer(object):
 
                  x_recon, enc_score = self.model(data)
 
-                 loss1 = 100 * F.mse_loss(x_recon, data, reduction='mean') - torch.mean(enc_score)
+                 loss1 = 1000 * F.mse_loss(x_recon, data, reduction='mean') - torch.mean(enc_score)
 
                  #we want enc to confuse discr and have discr give 1 to real data(even though it should give 0)
 
@@ -207,6 +207,22 @@ class Trainer(object):
 
 
                  self.model.enc_dec_step()
+
+               else:
+
+                 self.model.zero_grad_all()
+
+                 x_recon, _ = self.model(data)
+
+                 loss1 = 1000 * F.mse_loss(x_recon, data, reduction='mean')
+
+                 #only recon loss when discr is already confused
+
+                 loss1.backward()
+
+
+                 self.model.enc_dec_step()
+
 
                ##
 
@@ -217,7 +233,8 @@ class Trainer(object):
                loss2 = torch.mean(discr_real_score)
                #we want discr to give 0 for real data
 
-               loss2.backward()
+               if loss2.item() > -0.95:
+                   loss2.backward()
 
                self.model.discr.optimizer.step()
 
@@ -232,7 +249,8 @@ class Trainer(object):
                loss3 = -torch.mean(discr_gen_score)
                #we want discr to give 1 for generated data
 
-               loss3.backward()
+               if loss3.item() > -0.95:
+                   loss3.backward()
 
                self.model.discr.optimizer.step()
 
