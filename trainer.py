@@ -236,7 +236,7 @@ class Trainer(object):
                if loss2.item() > -0.95:
                    loss2.backward()
 
-               self.model.discr.optimizer.step()
+                   self.model.discr.optimizer.step()
 
                ##
 
@@ -252,7 +252,7 @@ class Trainer(object):
                if loss3.item() > -0.95:
                    loss3.backward()
 
-               self.model.discr.optimizer.step()
+                   self.model.discr.optimizer.step()
 
                ##
 
