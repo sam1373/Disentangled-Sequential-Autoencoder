@@ -7,15 +7,10 @@ import torch.optim as optim
 import numpy as np
 from model import *
 from tqdm import *
-<<<<<<< HEAD
-from dataset import *
-from moving_mnist.moving_mnist_loader import MovingMnistLoader
-from dataset.sprites_test import Sprites
-=======
+
 #from dataset import *
 from moving_mnist.moving_mnist_loader import MovingMnistLoader
 #from dataset.sprites_test import Sprites
->>>>>>> b16400f3e43be2f20af40b00a926a2b9fca132cd
 
 __all__ = ['loss_fn', 'Trainer']
 
@@ -174,7 +169,7 @@ class Trainer(object):
     def train_model(self):
        self.model.train()
 
-       avgDiff = 0
+       #avgDiff = 0
        for epoch in range(self.start_epoch,self.epochs):
            self.trainloader.shuffle()
            losses = []
@@ -184,7 +179,8 @@ class Trainer(object):
            print(len(self.trainloader))
 
 
-           lastDiff = avgDiff
+           lastDiff = 0
+           #lastDiff = avgDiff
            avgDiff = 0
 
            for i,dataitem in tqdm(enumerate(self.trainloader,1)):
@@ -195,10 +191,10 @@ class Trainer(object):
 
                TINY = 1e-15
 
-               loss1 = torch.Tensor([0])
+               loss1 = loss4 = torch.Tensor([0])
 
 
-               if lastDiff > 1.0:
+               if lastDiff > 0.1:
                  self.model.zero_grad_all()
 
                  x_recon, enc_score = self.model(data)
@@ -238,13 +234,31 @@ class Trainer(object):
 
                loss3.backward()
 
-               self.model.gen_codes_step()
+               self.model.discr.optimizer.step()
 
-               print(loss1, loss2, loss3)
+               ##
 
-               total_loss = loss1 + loss2 + loss3
+               if lastDiff > 0.1:
+
+                 self.model.zero_grad_all()
+
+                 f, z, discr_gen_score = self.model.gen_codes()
+
+
+                 loss4 = torch.mean(discr_gen_score)
+                 #we want distr to get 0 (to be more similar to discr)
+
+                 loss4.backward()
+
+                 self.model.distr.optimizer.step()
+
+
+               print(loss1, loss2, loss3, loss4)
+
+               total_loss = loss1 + loss2 + loss3 + loss4
 
                avgDiff += loss3.item() * -1 - loss2.item()
+               lastDiff = loss3.item() * -1 - loss2.item()
 
 
 

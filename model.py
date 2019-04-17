@@ -906,12 +906,11 @@ class DisentangledVAE_Adversarial(nn.Module):
         self.enc.optimizer.step()
         self.dec.optimizer.step()
 
-    def gen_codes_step(self):
+    #def gen_codes_step(self):
+    #    torch.nn.utils.clip_grad_norm_(self.parameters(), 0.25)
 
-        torch.nn.utils.clip_grad_norm_(self.parameters(), 0.25)
-
-        self.discr.optimizer.step()
-        self.discr.optimizer.step()
+    #    self.discr.optimizer.step()
+    #    self.discr.optimizer.step()
 
     def encode(self, x):
 
