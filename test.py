@@ -8,9 +8,9 @@ import torch.optim as optim
 import numpy as np
 from model import *
 from tqdm import *
-from dataset import *
+#from dataset import *
 from moving_mnist.moving_mnist_loader import MovingMnistLoader
-from dataset.sprites_test import Sprites
+#from dataset.sprites_test import Sprites
 import matplotlib.pyplot as plt
 
 
@@ -40,26 +40,24 @@ checkpoint = torch.load(checkpoint_dir)
 model.load_state_dict(checkpoint['state_dict'])
 
 
+
 with torch.no_grad():
 
         while(1):
-            x_gen, sc = model.gen_seq(4, get_score=True)
-            sc_mean = sc.mean().item()
-            print(sc_mean)
-            if(sc_mean < 0.1):
-                continue
-            x_gen = x_gen.view(4*model.frames, model.in_channels, 64,64)
+            print("Enter mult:")
+            mult = float(input())
 
-            #torchvision.utils.save_image(x_gen,'%s/epoch%d.png' % (self.sample_path,epoch), nrow=self.model.frames)
+            x_gen = model.gen_seq(10, mult=mult)
+            
+            x_gen = x_gen.view(10*model.frames, model.in_channels, 64,64)
+
+            torchvision.utils.save_image(x_gen,'sample/test.png', nrow=frames)
 
             #batch_tensor = torch.randn(*(10, 3, 256, 256))
 
             grid_img = torchvision.utils.make_grid(x_gen, nrow=frames)
 
-            print(grid_img.shape)
-
             plt.imshow(grid_img.permute(1, 2, 0).cpu())
             plt.show()
 
-            print(sc)
 
