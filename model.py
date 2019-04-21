@@ -516,17 +516,26 @@ class Distr_Network(nn.Module):
 
         self.fc_2 = LinearUnit(z_dim_seq, z_dim_seq, nonlinearity=nn.Sigmoid())
 
-        self.fc_3 = LinearUnit(p_dim, f_dim, nonlinearity=nn.Sigmoid())
+        self.fc_3 = LinearUnit(p_dim, p_dim // 2)
+
+        self.fc_4 = LinearUnit(p_dim // 2, p_dim // 2)
+
+        self.fc_5 = LinearUnit(p_dim // 2, f_dim, nonlinearity=nn.Sigmoid())
 
         self.cuda()
 
-        self.optimizer = optim.Adam(self.parameters(),LEARNING_RATE)
+        self.optimizer = optim.Adam(self.parameters(), LEARNING_RATE, weight_decay=1.)
+        #weight decay for some regularization
 
 
     def forward(self, x):
         #input_shape: bs, p_dim
 
         f = self.fc_3(x)
+
+        f = self.fc_4(f)
+
+        f = self.fc_5(f)
 
         x = self.fc_1(x)
 
@@ -809,7 +818,7 @@ class Discr_Network(nn.Module):
         z = self.mha_stack_1(z, z, z)
 
         #z = self.attn(z)
-        z = torch.mean(z, dim=(-2,))
+        z = torch.mean(z, dim=(-2,)) + self.attn(z)
 
         zf = torch.cat([z, f0], dim=-1)
 
