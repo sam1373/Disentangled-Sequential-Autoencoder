@@ -570,7 +570,7 @@ class Encoder_Network(nn.Module):
         self.in_size = in_size
         self.step = step
 
-        self.fc_z_mean = LinearUnit(self.z_dim_seq, self.z_dim_seq, nonlinearity=nn.Sigmoid())
+        self.fc_z_mean = LinearUnit(self.conv_dim, self.z_dim_seq, nonlinearity=nn.Sigmoid())
         #self.fc_z_logvar = LinearUnit(self.z_dim_seq, self.z_dim_seq)
 
         #self.fc_z_decoder = LinearUnit(self.z_dim, self.z_dim_seq * self.frames)
@@ -669,14 +669,14 @@ class Encoder_Network(nn.Module):
 
         #########################
 
-        x_conv = self.encode_conv_z(x) + x_pos
+        x_conv = self.encode_conv_z(x)# + x_pos
 
-        z_0 = self.mha_z_convert(x_conv, x_conv, x_conv)
-        z_0 = self.mha_z_stack(z_0, z_0, z_0)
+        #z_0 = self.mha_z_convert(x_conv, x_conv, x_conv)
+        #z_0 = self.mha_z_stack(z_0, z_0, z_0)
 
         #z_0 = z_0.view(-1, self.z_dim_seq * self.frames)
 
-        z = self.fc_z_mean(z_0)
+        z = self.fc_z_mean(x_conv)
         #z_logvar = self.fc_z_logvar(z_0)
 
         #z = self.reparameterize(z_mean, z_logvar)
@@ -705,6 +705,8 @@ class Decoder_Network(nn.Module):
             freeze=True)
 
         self.mha_z_decoder = mha_stack(z_dim_seq, stack_size=5, residual=True, self_attention=False, causality=True)
+
+        self.fc_z_decoder = LinearUnit(self.z_dim_seq, self.z_dim_seq)
 
         self.fc_zf = LinearUnit(self.z_dim_seq + self.f_dim, self.z_dim_seq + self.f_dim)
 
@@ -735,6 +737,7 @@ class Decoder_Network(nn.Module):
 
         #z = self.fc_z_decoder(z)
 
+        """
         z = z0.view(-1, self.frames, self.z_dim_seq)
 
         bs = z.shape[0]
@@ -746,7 +749,9 @@ class Decoder_Network(nn.Module):
         z = z + x_pos
 
         z = self.mha_z_decoder(z, z, z)
-        #z = self.fc_z_decoder(z)
+        """
+
+        z = self.fc_z_decoder(z)
 
         f = f0.unsqueeze(1).expand(-1, self.frames, self.f_dim)
 
