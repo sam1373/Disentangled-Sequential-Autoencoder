@@ -751,7 +751,7 @@ class Decoder_Network(nn.Module):
         z = self.mha_z_decoder(z, z, z)
         """
 
-        z = self.fc_z_decoder(z)
+        z = self.fc_z_decoder(z0)
 
         f = f0.unsqueeze(1).expand(-1, self.frames, self.f_dim)
 
