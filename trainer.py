@@ -127,7 +127,7 @@ class Trainer(object):
             recon_x = self.model.decode(test_f, test_z)
             recon_x = recon_x.view(4*self.model.frames, self.model.in_channels, 64,64)
             """
-            x_gen = self.model.gen_seq(4).view(4*self.model.frames, self.model.in_channels, 64,64)
+            x_gen = self.model.gen_seq(4, mult=0.5).view(4*self.model.frames, self.model.in_channels, 64,64)
             torchvision.utils.save_image(x_gen,'%s/epoch%d.png' % (self.sample_path,epoch), nrow=self.model.frames)
     
     def recon_frame(self,epoch,original):
@@ -194,7 +194,7 @@ class Trainer(object):
                loss4 = torch.Tensor([0])
 
 
-               if lastDiff > 0.1:
+               if lastDiff > 0.:
                  self.model.zero_grad_all()
 
                  x_recon, enc_score = self.model(data)
@@ -256,7 +256,7 @@ class Trainer(object):
 
                ##
 
-               if lastDiff > 0.1:
+               if lastDiff > 0.:
 
                  self.model.zero_grad_all()
 

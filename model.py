@@ -872,10 +872,10 @@ class DisentangledVAE_Adversarial(nn.Module):
 
         return f, z, D_score
 
-    def gen_seq(self, batch_size=64, get_score=False):
+    def gen_seq(self, batch_size=64, get_score=False, mult=1.):
 
 
-        inputs_r = torch.randn((batch_size, self.p_dim)).cuda()
+        inputs_r = torch.randn((batch_size, self.p_dim)).cuda() * mult
 
         f, z = self.distr(inputs_r)
 
