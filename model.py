@@ -524,7 +524,7 @@ class Distr_Network(nn.Module):
 
         self.cuda()
 
-        self.optimizer = optim.Adam(self.parameters(), LEARNING_RATE, weight_decay=1.)
+        self.optimizer = optim.Adam(self.parameters(), LEARNING_RATE, weight_decay=0.1)
         #weight decay for some regularization
 
 
@@ -790,10 +790,11 @@ class Discr_Network(nn.Module):
         self.attn = attention_layer(frames, z_dim_seq)
         #self.fc_dummy = LinearUnit(frames * z_dim_seq, z_d)
 
-        self.fc_1 = LinearUnit(z_dim_seq + f_dim, p_dim)
+        self.fc_1 = LinearUnit(z_dim_seq + f_dim, p_dim * 2)
 
+        self.fc_2 = LinearUnit(p_dim * 2, p_dim)
 
-        self.fc_2 = LinearUnit(p_dim, 1, nonlinearity=nn.Tanh())
+        self.fc_3 = LinearUnit(p_dim, 1, nonlinearity=nn.Tanh())
 
         self.cuda()
 
@@ -825,6 +826,8 @@ class Discr_Network(nn.Module):
         zf = self.fc_1(zf)
 
         zf = self.fc_2(zf)
+
+        zf = self.fc_3(zf)
 
         return zf
 
